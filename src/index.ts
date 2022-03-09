@@ -8,25 +8,28 @@ import M3U8FileParser from 'm3u8-file-parser';
 import * as CryptoJS from "crypto-js";
 import { slice } from 'ramda';
 import bitwise from 'bitwise';
-import Blob from 'blob';
 // import { create, globSource, CID } from 'ipfs-http-client'
-import { packToFs } from 'ipfs-car/pack/fs'
-import { NFTStorage, File } from 'nft.storage'
-import { Web3Storage, getFilesFromPath } from 'web3.storage'
+// import { packToFs } from 'ipfs-car/pack/fs'
+import { NFTStorage } from 'nft.storage'
+import { Web3Storage } from 'web3.storage'
+import { getFilesFromPath } from 'files-from-path'
 // import * as mime from 'mime'
 
 // edit info here
 const args = process.argv.slice(2)
-const startPoint = parseInt(args[0]);
-const endPoint = parseInt(args[1]);;
-const fileType = 'video' // 'audio';
-const VGM = 'VGMV'; // 'VGMA'
+const fileType = args[0]; // 'audio' | 'video';
+const concurrency = parseInt(args[1].replace('concurrency=', '')) || 1;
+const startPoint = parseInt(args[2].replace('start=', ''));
+const endPoint = parseInt(args[3].replace('end=', ''));
+const VGM = fileType === 'audio' ? 'VGMA' : fileType === 'video' ? 'VGMV' : undefined; // 'VGMV' 'VGMA'
 // const quality = '480';
 // const prefix = '/home/vgm/Desktop'; // '/home/vgm/Desktop'; // execSync('pwd', {encoding: 'utf8'}).replace('\n',''); 
-const queue = new PQueue({ concurrency: 2 });
+const queue = new PQueue({ concurrency: concurrency });
 const txtPath = `${__dirname}/database/${fileType}Single.txt`;
 const convertedPath = `VGM-Converted:vgmencrypted/encrypted/${VGM}`;
-const localTemp = `${__dirname}/database/tmp/${VGM}`;; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
+
+const localTemp = `${__dirname}/database/tmp/${VGM}`; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
+const mountedInput = `${__dirname}/database/mountedInput/${VGM}`; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
 const apiPath = `${__dirname}/database/API-convert/items/single`;
 // const gateway = `https://cdn.vgm.tv/encrypted/${VGM}`;
 // const originalTemp = `${prefix}/database/tmp`;
@@ -41,32 +44,8 @@ const web3Token = process.env.WEB3_TOKEN as string;
 const web3Storage = new Web3Storage({ token: web3Token });
 const nftToken = process.env.NFT_TOKEN as string;
 const nftStorage = new NFTStorage({ token: nftToken })
-
-import { createReadStream } from 'fs'
-import { CarReader } from '@ipld/car'
-
-
-// const checkFileExists = async (fileUrl) => {
-//       return new Promise((resolve) => {
-//         const url = `${gateway}/${fileUrl}/${quality}p.m3u8`; // if video 480p.m3u8 audio 128p.m3u8
-//         console.log('checking url:', url);
-
-//         // // check thumb url
-//         exec(`curl --silent --head --fail ${url}`, async (error, stdout, stderr) => {
-//           if (error) {
-//             console.log('file exist:', false);
-//             await fs.appendFileSync(`${prefix}/database/${fileType}-inipfs-count.txt`, `\n${url} --fileMissing`);
-//             resolve(false)
-//           };
-//           if (stderr) console.log('stderr', stderr);
-//           if (stdout) {
-//             console.log('file exist:', true);
-//             // await fs.appendFileSync(`${prefix}/database/${fileType}-converted-count.txt`, `\n${url} --fileExist`);
-//             resolve(true);
-//           };
-//         });
-//       });
-//     }
+// import { createReadStream } from 'fs';
+// import { CarReader } from '@ipld/car';
 
 const checkFileIsFull = async (outPath, fType) => {
   return new Promise(async (resolve) => {
@@ -116,44 +95,32 @@ const downloadConverted = async (fileLocation, outPath) => {
   });
 }
 
-
-// // ipfs Storage store CAR function
-async function storeCarFile(filename) {
-  const inStream = createReadStream(filename)
-  const car = await CarReader.fromIterable(inStream)
-  return car;
+const uploadEdited = async (outPath, fileLocation) => {
+  console.log('upload edited file:', `${outPath}/`, `${convertedPath}/${fileLocation}/`);
+  return new Promise(async (resolve) => {
+    const rclone = spawn('rclone', ['sync', '--progress', '--exclude', "*-mb.{m3u8,vgmk}", `${outPath}/`, `${convertedPath}/${fileLocation}/`]);
+    rclone.stdout.on('data', async (data) => {
+      console.log(`rclone upload edited stdout: ${data}`);
+    });
+    rclone.stderr.on('data', async (data) => {
+      console.log(`Stderr: ${data}`);
+    });
+    rclone.on('close', async (code) => {
+      console.log(`Upload edited file done with code:`, code);
+      resolve(true);
+    })
+  });
 }
 
 
-const uploadIPFS = async (input) => {
+const uploadIPFS = async (input, files) => {
   console.log('uploadingIPFS:', `${input}`);
   return new Promise(async (resolve) => {
     console.time(path.parse(input).name)
-    let nftCID;
-    let web3CID;
-    if (path.extname(input) === '.vgmk') {
-      // store file
-      const content = await fs.promises.readFile(input);
-      const keyFile = new File([content], path.basename(input));
-      web3CID = await web3Storage.put([keyFile], { wrapWithDirectory: false })
-      console.log('WEB3 key res:', web3CID);
-      fs.rmSync(input, { recursive: true, force: true });
-    } else {
-      // store folder
-      await packToFs({
-        input: input,
-        output: `${input}.car`,
-        wrapWithDirectory: false
-      })
-      const car = await storeCarFile(`${input}.car`);
-      nftCID = await nftStorage.storeCar(car);
-      console.log('cid from NFT:', nftCID);
-      web3CID = await web3Storage.putCar(car);
-      console.log('cid from WEB3:', web3CID);
-      const status = await nftStorage.status(nftCID)
-      console.log(status)
-      fs.rmSync(`${input}.car`, { recursive: true, force: true });
-    }
+    const nftCID = await nftStorage.storeDirectory(files)
+    console.log('cid from NFT:', nftCID);
+    const web3CID = await web3Storage.put(files)
+    console.log('cid from WEB3:', web3CID);
     if (web3CID) {
       console.timeEnd(path.parse(input).name)
       resolve(web3CID)
@@ -197,44 +164,54 @@ const processFile = async (file: string, fType) => {
     try {
       const jsonString = await fs.readFileSync(`${apiPath}/${file}.json`, { encoding: 'utf8' });
       let fileInfo: any = JSON.parse(jsonString);
-      console.log('old file info', fileInfo);
+      // console.log('old file info', fileInfo);
       const cloudPath = file.replace(/\./g, '\/');
+      // // download from s3 to local
       const downloadTmpDir = `${localTemp}/${cloudPath}`; // `${localTemp}/${cloudPath}`; // `${localTemp}/${file}`;
       await downloadConverted(cloudPath, downloadTmpDir);
 
+      // // // mounted directly from s3
+      // const downloadTmpDir = `${mountedInput}/${cloudPath}`; 
+
       // get decrypted key hash and upload to ipfs
       // get iv info
-      const reader = new M3U8FileParser();
-      let keyPath: string = fType === 'audio' ? `${downloadTmpDir}/128p.m3u8` : `${downloadTmpDir}/480p.m3u8`;
-      const segment = await fs.readFileSync(keyPath, { encoding: 'utf-8' });
-      reader.read(segment);
-      const m3u8 = reader.getResult();
-      const secret = `VGM-${m3u8.segments[0].key.iv.slice(0, 6).replace("0x", "")}`;
-      // get buffer from key and iv
-      const code = Buffer.from(secret);
-      const key: Buffer = await fs.readFileSync(`${downloadTmpDir}/key.vgmk`);
-      const encrypted = bitwise.buffer.xor(key, code, false);
-      const keyTmpPath = `${__dirname}/database/tmp/${file}.vgmk`;
-      await fs.writeFileSync(keyTmpPath, encrypted, { encoding: 'binary' });
-      const kHash: any = await uploadIPFS(keyTmpPath);
-      fileInfo.khash = kHash.toString();
-      // console.log('decrypted key hash:', fileInfo.khash);
-
-      // const decrypted = CryptoJS.AES.decrypt(fileInfo.khash,  slice(0, 32, fileInfo.url + 'gggggggggggggggggggggggggggggggg'));
-      // const decryptedKeyHash = decrypted.toString(CryptoJS.enc.Utf8);
-      // console.log(`bash edit-m3u8-key.sh "${downloadTmpDir}" '${fileType}' '${fileInfo.khash}'`);
-      await execSync(`bash edit-m3u8-key.sh "${downloadTmpDir}" '${fileType}' '${fileInfo.khash}'`);
-      const cid: any = await uploadIPFS(downloadTmpDir);
-      // console.log('cid from ipfs:', cid);
-      fileInfo.qm = cid.toString();
-      const secretKey = slice(0, 32, `${fileInfo.url}gggggggggggggggggggggggggggggggg`);
-      fileInfo.hash = CryptoJS.AES.encrypt(fileInfo.qm, secretKey).toString();
-      console.log('updated fileInfo:', fileInfo);
-      if (kHash && cid) {
-        // // rm downloaded directory when finish - comment if keep
-        await fs.rmdirSync(downloadTmpDir, { recursive: true })
-        resolve(`${kHash}|${cid}`)
+      if (fs.existsSync(downloadTmpDir)) {
+        // decrypte key && edit m3u8
+        const reader = new M3U8FileParser();
+        let keyPath: string = fType === 'audio' ? `${downloadTmpDir}/128p.m3u8` : `${downloadTmpDir}/480p.m3u8`;
+        const segment = await fs.readFileSync(keyPath, { encoding: 'utf-8' });
+        reader.read(segment);
+        const m3u8 = reader.getResult();
+        const secret = `VGM-${m3u8.segments[0].key.iv.slice(0, 6).replace("0x", "")}`;
+        const code = Buffer.from(secret);
+        const key: Buffer = await fs.readFileSync(`${downloadTmpDir}/key.vgmk`);
+        const encrypted = bitwise.buffer.xor(key, code, false);
+        const keyTmpPath = `${downloadTmpDir}/key-mb.vgmk`;
+        await fs.writeFileSync(keyTmpPath, encrypted, { encoding: 'binary' });
+        await execSync(`bash mb-m3u8.sh "${downloadTmpDir}"`);
+        // upload encrypted to ipfs
+        let files = await getFilesFromPath(downloadTmpDir, { ignore: ['*-mb.*'], pathPrefix: downloadTmpDir })
+        const encryptedCID: any = await uploadIPFS(downloadTmpDir, files);
+        // then upload decrypted to ipfs
+        files = await getFilesFromPath(downloadTmpDir, { ignore: ['*p.m3u8', 'playlist.m3u8', 'key.vgmk'], pathPrefix: downloadTmpDir });
+        const decryptedCID: any = await uploadIPFS(downloadTmpDir, files);
+        if (fType === 'audio') await uploadEdited(downloadTmpDir, cloudPath);
+        // console.log('cid from ipfs:', cid);
+        const secretKey = slice(0, 32, `${fileInfo.url}gggggggggggggggggggggggggggggggg`);
+        fileInfo.qm = encryptedCID.toString();
+        fileInfo.hash = CryptoJS.AES.encrypt(encryptedCID, secretKey).toString();
+        fileInfo.khash = CryptoJS.AES.encrypt(decryptedCID, secretKey).toString();
+        console.log('updated fileInfo:', fileInfo);
+        if (encryptedCID && decryptedCID) {
+          // // rm downloaded directory when finish - comment if keep
+          await fs.rmdirSync(downloadTmpDir, { recursive: true })
+          console.log('removed downloadTmpDir');
+          resolve(`${encryptedCID.toString()}|${decryptedCID.toString()}`)
+        }
+      } else {
+        resolve(false);
       }
+
     } catch (error) {
       resolve(false)
       console.log('error:', error);
@@ -243,6 +220,8 @@ const processFile = async (file: string, fType) => {
 };
 
 const main = async () => {
+
+
   try {
     // start script here
     const raw = fs.readFileSync(txtPath, { encoding: 'utf8' });
@@ -254,6 +233,7 @@ const main = async () => {
       for (let i = startPoint; i < listLength; i++) { // list.length or endPoint
         (async () => {
           queue.add(async () => {
+            console.log('Processing file:', list[i]);
             const start = new Date();
             const startTime = start.getFullYear() + '-' + (start.getMonth() + 1) + '-' + start.getDate() + '|' + start.getHours() + ":" + start.getMinutes() + ":" + start.getSeconds();
             const result = await processFile(list[i], fileType);
