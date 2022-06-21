@@ -5,12 +5,13 @@ import process from 'process';
 import { exec, execSync, spawn } from 'child_process'
 import PQueue from 'p-queue';
 import M3U8FileParser from 'm3u8-file-parser';
-import * as CryptoJS from "crypto-js";
-import { slice } from 'ramda';
+import * as os from 'os';
+// import * as CryptoJS from "crypto-js";
+// import { slice } from 'ramda';
 import bitwise from 'bitwise';
-import pRetry, { AbortError } from 'p-retry';
-import delay from 'delay';
-import { resolve } from 'path';
+// import pRetry, { AbortError } from 'p-retry';
+// import delay from 'delay';
+// import { resolve } from 'path';
 
 // edit info here
 const args = process.argv.slice(2)
@@ -21,60 +22,59 @@ const endPoint = parseInt(args[3].replace('end=', ''));
 const VGM = fileType === 'audio' ? 'VGMA' : fileType === 'video' ? 'VGMV' : undefined; // 'VGMV' 'VGMA'
 const queue = new PQueue({ concurrency: concurrency });
 const txtPath = `${__dirname}/database/${fileType}Single.txt`;
-const convertedPath = `vgm-aliyun:vgm/output/${VGM}`;  // `VGM-Converted:vgmencrypted/encrypted/${VGM}`; 
-
+const convertedPath = `converted-vgm-local:vgm-converted/encrypted/${VGM}`//`vgm-aliyun:vgm/output/${VGM}`;  // `VGM-Converted:vgmencrypted/encrypted/${VGM}`; 
 // const mountedInput = `${__dirname}/database/mountedInput/${VGM}`; // `${__dirname}/database/mountedInput/${VGM}`;  `/mnt/ntfs/VGMEncrypted/${VGM}`   
-const downloadTemp = `/home/vgm/Desktop/database/converted/${VGM}`; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
-const localTemp = `${__dirname}/database/tmp/${VGM}`;
-const ipfsGateway = 'http://192.168.1.151:32095';
+const downloadTemp = `${os.tmpdir()}/${VGM}`; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
+const localTemp = os.tmpdir();
+const ipfsGateway = 'http://ipfs.vgm.local:32095';
 // edit info end
 
 
-const checkFileIsFull = async (outPath, fType) => {
-	return new Promise(async (resolve) => {
-		const keyPath = `${outPath}/key.vgmk`;
-		const m3u8Path = fType === 'video' ? `${outPath}/480p.m3u8` : `${outPath}/128p.m3u8`;
-		if (fs.existsSync(outPath) && fs.existsSync(keyPath) && fs.existsSync(m3u8Path)) {
-			const reader = new M3U8FileParser();
-			const segment = await fs.readFileSync(m3u8Path, { encoding: 'utf-8' });
-			reader.read(segment);
-			const m3u8 = reader.getResult();
-			for await (const segment of m3u8.segments) {
-				if (!fs.existsSync(`${outPath}/${segment.url}`)) {
-					resolve(false);
-					break;
-				}
-			}
-			resolve(true);
-		} else {
-			resolve(false);
-		}
-	})
-}
+// const checkFileIsFull = async (outPath, fType) => {
+// 	return new Promise(async (resolve) => {
+// 		const keyPath = `${outPath}/key.vgmk`;
+// 		const m3u8Path = fType === 'video' ? `${outPath}/480p.m3u8` : `${outPath}/128p.m3u8`;
+// 		if (fs.existsSync(outPath) && fs.existsSync(keyPath) && fs.existsSync(m3u8Path)) {
+// 			const reader = new M3U8FileParser();
+// 			const segment = await fs.readFileSync(m3u8Path, { encoding: 'utf-8' });
+// 			reader.read(segment);
+// 			const m3u8 = reader.getResult();
+// 			for await (const segment of m3u8.segments) {
+// 				if (!fs.existsSync(`${outPath}/${segment.url}`)) {
+// 					resolve(false);
+// 					break;
+// 				}
+// 			}
+// 			resolve(true);
+// 		} else {
+// 			resolve(false);
+// 		}
+// 	})
+// }
 
 const downloadConverted = async (fileLocation, outPath) => {
 	console.log('download converted file', `${convertedPath}/${fileLocation}/`, `${outPath}/`);
 	return new Promise(async (resolve) => {
-		const startDownload = () => {
-			const rclone = spawn('rclone', ['copy', '--progress', `${convertedPath}/${fileLocation}/`, `${outPath}/`]);
-			rclone.stdout.on('data', async (data) => {
-				console.log(`rclone download converted stdout: ${data}`);
-			});
-			rclone.stderr.on('data', async (data) => {
-				console.log(`Stderr: ${data}`);
-			});
-			rclone.on('close', async (code) => {
-				console.log(`download converted file done with code:`, code);
-				resolve(true);
-			})
-		}
-		const fileIsFull = await checkFileIsFull(outPath, fileType);
-		console.log('fileIsFull:', fileIsFull);
-		if (fileIsFull) {
+		// const startDownload = () => {
+		const rclone = spawn('rclone', ['copy', '--progress', `${convertedPath}/${fileLocation}/`, `${outPath}/`]);
+		rclone.stdout.on('data', async (data) => {
+			console.log(`rclone download converted stdout: ${data}`);
+		});
+		rclone.stderr.on('data', async (data) => {
+			console.log(`Stderr: ${data}`);
+		});
+		rclone.on('close', async (code) => {
+			console.log(`download converted file done with code:`, code);
 			resolve(true);
-		} else {
-			startDownload();
-		}
+		})
+		// }
+		// const fileIsFull = await checkFileIsFull(outPath, fileType);
+		// console.log('fileIsFull:', fileIsFull);
+		// if (fileIsFull) {
+		// 	resolve(true);
+		// } else {
+		// 	startDownload();
+		// }
 	});
 }
 
@@ -160,8 +160,8 @@ const processFile = async (file: string, fType) => {
 				const decryptedCID: any = await uploadIPFS(decryptedCarPath);
 				if (encryptedCID && decryptedCID) {
 					// // rm downloaded directory when finish - comment if keep
-					// await fs.rmSync(downloadTmpDir, { recursive: true })
-					// console.log('removed downloadTmpDir');
+					await fs.rmSync(downloadTmpDir, { recursive: true })
+					console.log('removed downloadTmpDir');
 					resolve(`${encryptedCID.toString()}|${decryptedCID.toString()}`)
 				}
 				// resolve('done123')

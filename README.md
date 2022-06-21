@@ -1,3 +1,9 @@
+## `Installation`
+
+```
+npm install -g ipfs-car
+```
+
 ## `yarn dev`
 
 Edit info in src/index.ts and run script with

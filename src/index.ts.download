@@ -1,0 +1,91 @@
+import * as fs from 'fs'
+import 'dotenv/config'
+import process from 'process';
+import { spawn } from 'child_process'
+import PQueue from 'p-queue';
+
+// edit info here
+const args = process.argv.slice(2)
+const fileType = args[0]; // 'audio' | 'video';
+const concurrency = parseInt(args[1].replace('concurrency=', '')) || 1;
+const startPoint = parseInt(args[2].replace('start=', ''));
+const endPoint = parseInt(args[3].replace('end=', ''));
+const VGM = fileType === 'audio' ? 'VGMA' : fileType === 'video' ? 'VGMV' : undefined; // 'VGMV' 'VGMA'
+const queue = new PQueue({ concurrency: concurrency });
+const txtPath = `${__dirname}/database/${fileType}Single.txt`;
+const convertedPath = `vgm-aliyun:vgm/output/${VGM}`;
+const encryptedLocal = `/mnt/backup/converted/${VGM}`; //`converted-vgm-local:vgm-converted/encrypted/${VGM}`;
+const downloadTemp = `/home/vgm/Desktop/database/converted/${VGM}`;
+// edit info end
+
+const downloadConverted = async (fileLocation, output) => {
+	console.log('download converted file', `${convertedPath}/${fileLocation}/`, `${encryptedLocal}/${fileLocation}/`);
+	const extraOption = ['--no-update-modtime', '--transfers', '10', '--s3-chunk-size', '64M'];
+	return new Promise(async (resolve) => {
+		const rclone = spawn('rclone', ['copy', '--progress', `${convertedPath}/${fileLocation}/`, `${encryptedLocal}/${fileLocation}/`].concat(extraOption));
+		rclone.stdout.on('data', async (data) => {
+			console.log(`rclone download converted stdout: ${data}`);
+		});
+		rclone.stderr.on('data', async (data) => {
+			console.log(`Stderr: ${data}`);
+		});
+		rclone.on('close', async (code) => {
+			console.log(`download converted file done with code:`, code);
+			resolve(true);
+		})
+	});
+}
+
+
+const processFile = async (file: string, fType) => {
+	console.log('processing:', file);
+	return new Promise(async (resolve) => {
+		try {
+			const cloudPath = file.replace(/\./g, '\/');
+			// download from s3 to local
+			const downloadTmpDir = `${downloadTemp}/${cloudPath}`;
+			const result = await downloadConverted(cloudPath, downloadTmpDir);
+			resolve(result)
+		} catch (error) {
+			resolve(false)
+			console.log('error:', error);
+		}
+	})
+};
+
+
+const main = async () => {
+	try {
+		// start script here
+		const raw = fs.readFileSync(txtPath, { encoding: 'utf8' });
+		if (raw) {
+			let list = raw.split('\n');
+			list.pop();
+			console.log('total files', list.length);
+			const listLength = endPoint ? endPoint : list.length;
+			for (let i = startPoint; i < listLength; i++) { // list.length or endPoint
+				(async () => {
+					queue.add(async () => {
+						console.log('Processing file:', list[i]);
+						const start = new Date();
+						const startTime = start.getFullYear() + '-' + (start.getMonth() + 1) + '-' + start.getDate() + '|' + start.getHours() + ":" + start.getMinutes() + ":" + start.getSeconds();
+						const result = await processFile(list[i], fileType);
+						const end = new Date();
+						const endTime = end.getFullYear() + '-' + (end.getMonth() + 1) + '-' + end.getDate() + '|' + end.getHours() + ":" + end.getMinutes() + ":" + end.getSeconds();
+						//   console.log('processed files', i, dateTime);
+						if (result) {
+							await fs.appendFileSync(`${__dirname}/database/${fileType}-download-count.txt`, `\n${i}|${list[i]}|${result}|${startTime}|${endTime}`);
+						} else {
+							await fs.appendFileSync(`${__dirname}/database/${fileType}-download-count.txt`, `\n${i}|notfound|${list[i]}`);
+						}
+					});
+				})();
+			}
+		}
+	} catch (error) {
+		console.log(error);
+	}
+}
+
+
+main();
