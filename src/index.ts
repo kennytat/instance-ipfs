@@ -16,20 +16,27 @@ const endPoint = parseInt(args[3].replace('end=', ''));
 const VGM = fileType === 'audio' ? 'VGMA' : fileType === 'video' ? 'VGMV' : undefined; // 'VGMV' 'VGMA'
 const queue = new PQueue({ concurrency: concurrency });
 const txtPath = `${__dirname}/database/${fileType}Single.txt`;
-const cloudPath = `vgm-aliyun:vgm/output/${VGM}`; // `converted-vgm-local:vgm-converted/encrypted/${VGM}`// `vgm-aliyun:vgm/output/${VGM}`;  // `VGM-Converted:vgmencrypted/encrypted/${VGM}`; 
+const cloudPath = `vgmvb:vgmvb/encrypted/${VGM}`; //`vgm-aliyun:vgm/output/${VGM}`; // `converted-vgm-local:vgm-converted/encrypted/${VGM}`// `vgm-aliyun:vgm/output/${VGM}`;  // `VGM-Converted:vgmencrypted/encrypted/${VGM}`; 
 // const mountedInput = `${__dirname}/database/mountedInput/${VGM}`; // `${__dirname}/database/mountedInput/${VGM}`;  `/mnt/ntfs/VGMEncrypted/${VGM}`   
-const localPath = `/mnt/data/converted/${VGM}`
+const localPath = `/mnt/backup/VB-Converted/${VGM}`;//`/mnt/data/converted/${VGM}`
 // const downloadTemp = `${os.tmpdir()}/${VGM}`; // `/home/vgm/Desktop/VGMEncrypted/${VGM}`  `/mnt/ntfs/VGMEncrypted/${VGM}`   `${__dirname}/database/tmp/${VGM}`;
-const localTemp = `${os.tmpdir()}/VGM`;
-const carStorage = `converted-vgm-local:vgm-converted/VGM`
+const localTemp = `${os.tmpdir()}/vgm`;
+const carStorage = `converted-vgm-local:vgm-converted/vgm`;
 const ipfsGateway = 'https://api-ipfs-vn.hjm.bid';
 // edit info end
 
-const rcloneCopy = async (inPath, outPath) => {
+const rcloneCopy = async (inPath, outPath, type = 'folder') => {
 	console.log('download converted file', `${inPath}`, `${outPath}`);
 	return new Promise(async (resolve) => {
+		let args: string[] = []
+		if (type === 'folder') {
+			args = ['copy', '--progress', `${inPath}`, `${outPath}`]
+		}
+		if (type === 'file') {
+			args = ['copy', '--progress', '--include', path.basename(inPath), path.dirname(inPath), `${outPath}`]
+		}
 		// const startDownload = () => {
-		const rclone = spawn('rclone', ['copy', '--progress', `${inPath}`, `${outPath}`]);
+		const rclone = spawn('rclone', args);
 		rclone.stdout.on('data', async (data) => {
 			console.log(`rclone copy stdout: ${data}`);
 		});
@@ -93,17 +100,17 @@ const processFile = async (file: string, fType) => {
 			const src = `${cloudPath}/${fileLocation}`;
 			const des = `${localPath}/${fileLocation}`;
 			// const downloadTmpDir = `${downloadTemp}/${fileLocation}`; // `${localTemp}/${cloudPath}`; // `${localTemp}/${file}`;
-			const downloaded = await rcloneCopy(`${src}/`, `${des}/`);
+			const downloaded = await rcloneCopy(`${src}/`, `${des}/`, 'folder');
 			// // // mounted directly from s3
 			// const downloadTmpDir = `${mountedInput}/${cloudPath}`; 
 
 			// get decrypted key hash and upload to ipfs
 			// get iv info
 			if (downloaded) {
-				// // upload encrypted from car
-				const encryptedCarPath = `${localTemp}/${path.basename(des)}-encrypted.car`;
+				// upload encrypted from car
+				const encryptedCarPath = `${localTemp}/${path.basename(des)}.car`;
 				await packCar(des, encryptedCarPath);
-				await rcloneCopy(encryptedCarPath, `${carStorage}/`);
+				await rcloneCopy(encryptedCarPath, `${carStorage}/`, 'file');
 				const encryptedCID: any = await uploadIPFS(encryptedCarPath);
 				// decrypte key && edit m3u8
 				const keyPath: string = fType === 'audio' ? `${des}/128p.m3u8` : `${des}/480p.m3u8`;
@@ -117,8 +124,8 @@ const processFile = async (file: string, fType) => {
 				const encrypted = bitwise.buffer.xor(key, code, false);
 
 				// // upload decrypted from car
-				const decryptedTempDir = `${localTemp}/${path.basename(des)}-decrypted`;
-				const decryptedCarPath = `${localTemp}/${path.basename(des)}-decrypted.car`;
+				const decryptedTempDir = `${localTemp}/${path.basename(des)}`;
+				const decryptedCarPath = `${localTemp}/${path.basename(des)}.car`;
 				await execSync(`bash symlink.sh "${des}" "${decryptedTempDir}"`);
 
 				const keyTmpPath = `${decryptedTempDir}/key.vgmk`;
@@ -133,7 +140,7 @@ const processFile = async (file: string, fType) => {
 					// console.log('removed downloadTmpDir');
 					resolve(`${encryptedCID.toString()}|${decryptedCID.toString()}`)
 				}
-				// resolve('done123')
+				resolve(false)
 			} else {
 				resolve(false);
 			}
